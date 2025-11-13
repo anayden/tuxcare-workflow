@@ -89,6 +89,16 @@ def main() -> int:
         logger = setup_logging(config.verbosity)
         logger.info("TuxCare VEX Auto-Triage starting...")
         
+        # Log token info for debugging (without revealing actual token)
+        if config.verbosity == "DEBUG":
+            token = config.github_token
+            if token:
+                token_len = len(token)
+                token_prefix = token[:4] if len(token) >= 4 else "???"
+                logger.debug(f"Token loaded: length={token_len}, prefix={token_prefix}...")
+            else:
+                logger.error("Token is empty!")
+        
         # Initialize GitHub client
         github_client = GitHubClient(config.github_token, config.github_repository)
         

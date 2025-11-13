@@ -42,7 +42,7 @@ jobs:
         uses: tuxcare/vex-auto-triage@v1
         with:
           ecosystems: 'java,python'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ## Configuration
@@ -52,7 +52,7 @@ jobs:
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `ecosystems` | Yes | - | Comma-separated list of ecosystems to process: `java`, `python`, `javascript`, `php` |
-| `github-token` | Yes | - | GitHub token with `security_events` write permission |
+| `token` | Yes | - | GitHub token with `security_events` write permission |
 | `dry-run` | No | `false` | If `true`, simulates dismissals without actually dismissing alerts |
 | `max-alerts` | No | `0` | Maximum number of alerts to process (0 = unlimited, useful for testing) |
 | `verbosity` | No | `INFO` | Logging level: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
@@ -75,7 +75,7 @@ permissions:
 - uses: tuxcare/vex-auto-triage@v1
   with:
     ecosystems: 'java'
-    github-token: ${{ secrets.GITHUB_TOKEN }}
+    token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Multiple Ecosystems
@@ -84,7 +84,7 @@ permissions:
 - uses: tuxcare/vex-auto-triage@v1
   with:
     ecosystems: 'java,python,javascript,php'
-    github-token: ${{ secrets.GITHUB_TOKEN }}
+    token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ### Dry-Run Mode (Testing)
@@ -95,7 +95,7 @@ Test the action without dismissing alerts:
 - uses: tuxcare/vex-auto-triage@v1
   with:
     ecosystems: 'java'
-    github-token: ${{ secrets.GITHUB_TOKEN }}
+    token: ${{ secrets.GITHUB_TOKEN }}
     dry-run: 'true'
     verbosity: 'DEBUG'
 ```
@@ -108,7 +108,7 @@ Process only the first 10 alerts:
 - uses: tuxcare/vex-auto-triage@v1
   with:
     ecosystems: 'java'
-    github-token: ${{ secrets.GITHUB_TOKEN }}
+    token: ${{ secrets.GITHUB_TOKEN }}
     max-alerts: '10'
 ```
 
@@ -140,7 +140,7 @@ jobs:
       - uses: tuxcare/vex-auto-triage@v1
         with:
           ecosystems: 'java,python'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: ${{ inputs.dry_run }}
 ```
 
@@ -162,25 +162,44 @@ jobs:
 
 ### Version Matching
 
-The action uses smart version matching to ensure accuracy:
+The action uses **exact version matching** to ensure accuracy and prevent false dismissals:
 
-1. **Normalize versions**: Strips `.tuxcare` suffix from versions
-2. **Parse ranges**: Interprets GitHub's vulnerable version ranges (e.g., `>= 25.0, < 32.0`)
-3. **Compare**: Checks if TuxCare's patched version falls within the vulnerable range
+1. **Extract actual version**: Gets the exact version from your manifest (pom.xml, requirements.txt, etc.)
+2. **Check TuxCare suffix**: Verifies the actual version has the `.tuxcare` suffix
+3. **Compare base versions**: If using TuxCare version, compares the base version with VEX data
 4. **Validate**: Confirms the fix applies to the specific package and CVE
 
-### Example Scenario
+**Critical**: Alerts are only dismissed if your repository is using the TuxCare patched version (with `.tuxcare` suffix), not just because a patched version exists in VEX.
 
-**Alert**: Guava vulnerability CVE-2020-8908 in version range `>= 25.0, < 32.0`
+### Example Scenarios
 
-**VEX Data**: TuxCare has `guava@30.1-jre.tuxcare` marked as "resolved" for CVE-2020-8908
+#### Scenario 1: Using Vanilla Version (Alert NOT Dismissed)
+
+**Your pom.xml**: `log4j:log4j:1.2.17`
+
+**Alert**: CVE-2021-4104 in log4j affecting `>= 1.2.0, <= 1.2.17`
+
+**VEX Data**: TuxCare has `log4j@1.2.17.tuxcare.1` marked as "resolved"
 
 **Action**:
-1. Normalizes `30.1-jre.tuxcare` → `30.1-jre`
-2. Checks `30.1-jre` is in range `>= 25.0, < 32.0` ✓
+1. Extracts actual version: `1.2.17` (no `.tuxcare` suffix)
+2. Recognizes repository is NOT using TuxCare patched version
+3. **Skips dismissal** - you don't have the fix
+
+#### Scenario 2: Using TuxCare Version (Alert Dismissed)
+
+**Your pom.xml**: `log4j:log4j:1.2.17.tuxcare.1`
+
+**Alert**: CVE-2021-4104 in log4j affecting `>= 1.2.0, <= 1.2.17`
+
+**VEX Data**: TuxCare has `log4j@1.2.17.tuxcare.1` marked as "resolved"
+
+**Action**:
+1. Extracts actual version: `1.2.17.tuxcare.1` (has `.tuxcare` suffix) ✓
+2. Normalizes both versions: `1.2.17` == `1.2.17` ✓
 3. Verifies package name matches ✓
 4. Confirms state is "resolved" ✓
-5. **Dismisses the alert**
+5. **Dismisses the alert** - you have the fix
 
 ## VEX Data Sources
 
@@ -251,11 +270,34 @@ Alerts may be skipped for various reasons:
 | `ecosystem-not-selected` | Ecosystem not in selected list |
 | `no-vex-data` | Failed to load VEX data for ecosystem |
 | `cve-not-in-vex` | CVE not found in VEX data |
-| `no-positive-vex-match` | No resolved VEX entry matches alert criteria |
+| `no-actual-version` | Cannot determine actual version from manifest |
+| `no-positive-vex-match` | Repository not using TuxCare patched version |
 | `invalid-package` | Package name format invalid |
 | `dismiss-failed` | API call to dismiss alert failed |
 
 ## Troubleshooting
+
+### No Alerts Found (0 Alerts Returned)
+
+If the action reports 0 alerts but you can see alerts in the GitHub UI, this is almost always a **permissions issue**.
+
+**Quick diagnosis**:
+
+```bash
+export GITHUB_TOKEN="your-token"
+export GITHUB_REPOSITORY="owner/repo"
+python debug_permissions.py
+```
+
+**Most common fix**: Ensure your workflow has proper permissions:
+
+```yaml
+permissions:
+  contents: read
+  security-events: write  # ← Required!
+```
+
+**See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for detailed solutions.**
 
 ### No Alerts Dismissed
 

@@ -53,7 +53,7 @@ jobs:
           ecosystems: ${{ inputs.ecosystems || 'java,python' }}
           
           # Use built-in GITHUB_TOKEN
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
           
           # Dry-run mode for testing
           dry-run: ${{ inputs.dry_run || 'false' }}

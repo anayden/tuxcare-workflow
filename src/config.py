@@ -40,7 +40,7 @@ class Config:
         """Initialize configuration from environment variables."""
         self.ecosystems = self._parse_ecosystems()
         self.github_repository = self._get_required("GITHUB_REPOSITORY")
-        self.github_token = self._get_required("INPUT_GITHUB-TOKEN")
+        self.github_token = self._get_required("INPUT_TOKEN")
         self.dry_run = self._get_bool("INPUT_DRY-RUN", False)
         self.max_alerts = self._get_int("INPUT_MAX-ALERTS", 0)
         self.verbosity = self._get_str("INPUT_VERBOSITY", "INFO").upper()

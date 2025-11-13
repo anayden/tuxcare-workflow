@@ -56,6 +56,23 @@ class TriageEngine:
         logger.info(f"Max alerts: {self.config.max_alerts if self.config.max_alerts > 0 else 'unlimited'}")
         logger.info("=" * 60)
         
+        # In DEBUG mode, check token permissions
+        if self.config.verbosity == "DEBUG":
+            logger.info("\n[DEBUG] Checking token permissions...")
+            token_info = self.github_client.check_token_permissions()
+            logger.info(f"Token authenticated: {token_info.get('authenticated')}")
+            logger.info(f"Token scopes: {token_info.get('scopes', 'unknown')}")
+            logger.info(f"Authenticated as: {token_info.get('user', 'unknown')}")
+            
+            scopes = token_info.get('scopes', '')
+            if 'security_events' in scopes or 'repo' in scopes:
+                logger.info("✓ Token has security_events or repo scope")
+            else:
+                logger.warning("⚠ Token may lack security_events scope!")
+                logger.warning(f"  Available scopes: {scopes}")
+                logger.warning("  This may cause issues reading vulnerability alerts")
+            logger.info("")
+        
         # Pre-fetch and parse VEX data for all ecosystems
         logger.info("\n[PHASE 1] Fetching VEX data...")
         vex_data = self._fetch_vex_data()
@@ -120,7 +137,6 @@ class TriageEngine:
             vex_data: Parsed VEX data for all ecosystems
         """
         alert_number = alert.get("number", "unknown")
-        alert_id = alert.get("id", "")
         
         logger.info(f"Processing alert #{alert_number}")
         
@@ -137,9 +153,11 @@ class TriageEngine:
         ecosystem = pkg_info["ecosystem"]
         package_name = pkg_info["name"]
         version_range = pkg_info["version_range"]
+        actual_version = pkg_info["actual_version"]
         
         logger.info(f"  Package: {package_name}")
         logger.info(f"  Ecosystem: {ecosystem}")
+        logger.info(f"  Actual version in repo: {actual_version}")
         logger.info(f"  Vulnerable range: {version_range}")
         
         # Validate package name format
@@ -179,6 +197,17 @@ class TriageEngine:
         vex_packages = cve_index[cve]
         logger.info(f"  Found {len(vex_packages)} VEX entries for {cve}")
         
+        # Check if we have the actual version from the manifest
+        if not actual_version:
+            logger.warning("  No actual version found in alert (vulnerableRequirements is empty)")
+            logger.warning("  Cannot determine if repository uses TuxCare patched version")
+            self._skip_alert(
+                alert_number,
+                "no-actual-version",
+                "Cannot determine actual version used in repository"
+            )
+            return
+        
         matched = False
         for vex_pkg in vex_packages:
             vex_full_name = vex_pkg.get("full_name", "")
@@ -197,14 +226,19 @@ class TriageEngine:
                 logger.debug(f"    State is not resolved: {vex_state}")
                 continue
             
-            # Check if VEX version matches vulnerable range
-            if version_range and not VersionMatcher.version_in_range(vex_version, version_range):
-                logger.debug(f"    Version mismatch: {vex_version} not in range {version_range}")
+            # NEW LOGIC: Check if actual version in repo matches the VEX patched version
+            # The key insight is: we should only dismiss if the repo is using the TuxCare patched version
+            # For example: repo uses "1.2.17.tuxcare.1" and VEX says "1.2.17.tuxcare.1" is patched
+            # We should NOT dismiss if repo uses "1.2.17" even if "1.2.17.tuxcare.1" exists in VEX
+            if not VersionMatcher.versions_match(actual_version, vex_version):
+                logger.debug(f"    Version mismatch: actual '{actual_version}' != VEX '{vex_version}'")
+                logger.debug("    (Repository must use the TuxCare patched version to dismiss)")
                 continue
             
             # We have a match!
             matched = True
             logger.info(f"  ✓ Match found: {vex_full_name} @ {vex_version} (resolved)")
+            logger.info("  ✓ Repository is using TuxCare patched version")
             
             # Dismiss the alert
             self._dismiss_alert(alert, cve, package_name, vex_version, vex_full_name)
@@ -214,7 +248,7 @@ class TriageEngine:
             self._skip_alert(
                 alert_number,
                 "no-positive-vex-match",
-                f"No resolved VEX entry matches alert criteria"
+                f"Repository not using TuxCare patched version (actual: {actual_version})"
             )
     
     def _map_github_ecosystem(self, github_ecosystem: str) -> str:

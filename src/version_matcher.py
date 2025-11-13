@@ -231,4 +231,107 @@ class VersionMatcher:
             "2.7.18.tuxcare.3" -> "2.7.18"
         """
         return VersionMatcher.normalize_version(version_str)
+    
+    @staticmethod
+    def extract_exact_version(version_requirement: str) -> Optional[str]:
+        """
+        Extract exact version from a version requirement string.
+        
+        Maven, pip, npm, and composer may have version requirements like:
+        - "= 1.2.17" or "1.2.17" (exact version)
+        - "[1.2.17]" (Maven exact version)
+        - "== 1.2.17" (pip exact version)
+        - "^1.2.17" or "~1.2.17" (npm/composer range)
+        
+        This function tries to extract the exact version if present.
+        
+        Args:
+            version_requirement: Version requirement string from manifest
+        
+        Returns:
+            Exact version string if found, or the input string stripped of operators
+        
+        Example:
+            "= 1.2.17" -> "1.2.17"
+            "1.2.17" -> "1.2.17"
+            "[1.2.17]" -> "1.2.17"
+            ">= 1.2.0" -> "1.2.0" (may not be exact, but returns the constraint version)
+        """
+        if not version_requirement:
+            return None
+        
+        req = version_requirement.strip()
+        
+        # Remove Maven brackets [version]
+        if req.startswith('[') and req.endswith(']'):
+            req = req[1:-1].strip()
+        
+        # Remove common operators and extract version
+        # Handle: =, ==, >=, <=, >, <, ^, ~
+        match = re.match(r'^[\^~><=!]*\s*(.+)$', req)
+        if match:
+            return match.group(1).strip()
+        
+        return req
+    
+    @staticmethod
+    def versions_match(actual_version: str, vex_version: str) -> bool:
+        """
+        Check if the actual version used in repository matches the VEX patched version.
+        
+        The key insight: alerts should only be dismissed if the repository is actually using
+        the TuxCare patched version. If the repo uses vanilla "1.2.17" and VEX has
+        "1.2.17.tuxcare.1", they should NOT match because the repo doesn't have the patch.
+        
+        Matching logic:
+        - If actual version has .tuxcare suffix: normalize both and compare base versions
+        - If actual version does NOT have .tuxcare suffix: no match (repo not using patched version)
+        
+        Args:
+            actual_version: Version requirement from manifest (may include operators)
+            vex_version: TuxCare patched version from VEX (e.g., "1.2.17.tuxcare.1")
+        
+        Returns:
+            True only if the repository is using a TuxCare patched version that matches VEX
+        
+        Example:
+            versions_match("1.2.17", "1.2.17.tuxcare.1") -> False (repo not using TuxCare version)
+            versions_match("1.2.17.tuxcare.1", "1.2.17.tuxcare.1") -> True (exact match)
+            versions_match("1.2.17.tuxcare.1", "1.2.17.tuxcare.2") -> True (same base, different patch)
+            versions_match("= 1.2.17.tuxcare.1", "1.2.17.tuxcare.1") -> True (with operator)
+            versions_match("[1.2.17.tuxcare.1]", "1.2.17.tuxcare.1") -> True (Maven format)
+        """
+        if not actual_version or not vex_version:
+            return False
+        
+        # Extract exact version from requirement (removes operators like =, >=, etc.)
+        actual_clean = VersionMatcher.extract_exact_version(actual_version)
+        if not actual_clean:
+            return False
+        
+        # Check if the actual version has a .tuxcare suffix
+        has_tuxcare_suffix = '.tuxcare' in actual_clean.lower()
+        
+        if not has_tuxcare_suffix:
+            # Repository is NOT using a TuxCare patched version
+            # Therefore, it doesn't have the fix, and we should not dismiss the alert
+            logger.debug(f"Actual version '{actual_clean}' does not have .tuxcare suffix - not using patched version")
+            return False
+        
+        # Both versions have (or actual has) .tuxcare suffix
+        # Normalize both versions (remove .tuxcare suffix and compare base versions)
+        actual_normalized = VersionMatcher.normalize_version(actual_clean)
+        vex_normalized = VersionMatcher.normalize_version(vex_version)
+        
+        # Parse both versions
+        actual_ver = VersionMatcher.parse_version(actual_normalized)
+        vex_ver = VersionMatcher.parse_version(vex_normalized)
+        
+        if actual_ver is None or vex_ver is None:
+            # Fallback to string comparison if parsing fails
+            logger.debug(f"Version parsing failed, using string comparison: {actual_normalized} vs {vex_normalized}")
+            return actual_normalized.lower() == vex_normalized.lower()
+        
+        # Compare parsed versions
+        return actual_ver == vex_ver
 

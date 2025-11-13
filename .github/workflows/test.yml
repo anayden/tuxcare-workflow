@@ -23,7 +23,7 @@ jobs:
         uses: ./
         with:
           ecosystems: 'java'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
           dry-run: 'true'
           max-alerts: '10'
           verbosity: 'DEBUG'
